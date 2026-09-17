@@ -1,0 +1,36 @@
+# SQL Server local SO para desenvolvimento do cashflow-auth isolado.
+# Em producao o cashflow-auth aponta DATABASE_URL para o MESMO banco do Cashflow .NET
+# (a tabela [User] e a fonte de identidade). Aqui subimos uma copia local so com um usuario
+# de teste (local/seed.sql) para poder rodar o servico sozinho.
+#
+# Rede/porta diferentes das ja usadas por cashflow (172.31.31.0/24) e
+# cashflow-investimentos (172.31.32.0/24), para os tres rodarem juntos.
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2025-latest
+    container_name: cashflow-auth-db
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${DATABASE_PASSWORD:-Auth@Local123}"
+      MSSQL_PID: Developer
+    ports:
+      - "${DATABASE_PORT:-1435}:1433"
+    volumes:
+      - cashflow-auth-db-data:/var/opt/mssql
+    networks:
+      - cashflow-auth
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+networks:
+  cashflow-auth:
+    name: cashflow-auth
+    ipam:
+      config:
+        - subnet: 172.31.33.0/24
+
+volumes:
+  cashflow-auth-db-data:

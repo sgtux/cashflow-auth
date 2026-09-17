@@ -1,0 +1,18 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+### Env local e chaves ###
+.env
+*.pem
+local/keys/
+
+### IDE ###
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+### OS ###
+.DS_Store

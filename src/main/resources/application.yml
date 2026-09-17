@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: cashflow-auth
+
+  # Carrega um .env local (opcional) para desenvolvimento. Ver .env.example.
+  config:
+    import: "optional:file:.env[.properties]"
+
+  # Aponta para o MESMO banco do Cashflow .NET (tabela [User]). Somente leitura de credenciais;
+  # este servico nunca escreve nem aplica DDL. Ver ./docs/arquitetura.md secao 4.
+  datasource:
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USERNAME:sa}
+    password: ${DATABASE_PASSWORD}
+
+server:
+  port: ${SERVER_PORT:9000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+# Configuracao propria do emissor de tokens (ver ./docs/especificacao.md secoes 3 e 5).
+auth:
+  # Vai na claim "iss". Os consumidores validam este valor exato. Ex.: https://auth.cashflow.example.com
+  issuer: ${AUTH_ISSUER:http://localhost:9000}
+  # Tempo de vida do access token, em minutos.
+  token-ttl-minutes: ${AUTH_TOKEN_TTL_MINUTES:60}
+  # "kid" da chave ativa (a que assina). Precisa existir no JWKS publicado.
+  active-kid: ${AUTH_ACTIVE_KID:dev}
+  # Chave privada RSA ativa, PEM PKCS#8 ("-----BEGIN PRIVATE KEY-----"). Em dev pode ficar vazia
+  # (ver dev-generate-key). Em producao vem de um secret manager, NUNCA versionada.
+  private-key-pem: ${AUTH_PRIVATE_KEY_PEM:}
+  # JWKS extra (JSON) com chaves PUBLICAS ainda aceitas mas que nao assinam mais - usado na
+  # rotacao de chave para nao invalidar tokens ja emitidos. Ver ./docs/especificacao.md secao 5.2.
+  additional-jwks: ${AUTH_ADDITIONAL_JWKS:}
+  # Dev: se nao houver private-key-pem, gera um par RSA efemero na subida (troca a cada restart).
+  # DEVE ser false em producao.
+  dev-generate-key: ${AUTH_DEV_GENERATE_KEY:true}
+
+logging:
+  level:
+    com.cashflow.auth: DEBUG
