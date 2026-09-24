@@ -1,9 +1,10 @@
-name: Build
+name: Build and Tests
 
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 # Uma execucao por branch/PR: um push novo cancela a anterior que ainda esta rodando.
 concurrency:

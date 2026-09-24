@@ -1,19 +1,25 @@
 name: Deploy to Azure App Service
 
-# So dispara manualmente de proposito - este servico assina token de producao, um deploy
-# automatico a cada push para main e um risco maior do que o beneficio de continuous deployment
-# aqui. Se quiser CD de verdade depois, adicione um gatilho "push: branches: [main]".
+# Dispara sozinho quando o "Build and Tests" (build.yml) terminar com sucesso em main - sem
+# rebuildar aqui, so baixa o jar que aquele workflow ja publicou (elimina build+teste duplicado).
+#
+# Isso reintroduz deploy automatico pra producao a cada push em main. Se quiser um humano
+# aprovando antes do deploy rodar de verdade (mesmo disparando sozinho), configure "Required
+# reviewers" no Environment CashflowAuth (Settings > Environments > CashflowAuth) - o job pausa
+# esperando aprovacao antes dos passos abaixo executarem.
+#
+# Redeploy manual do mesmo build: usa "Re-run jobs" na execucao do build.yml ou deste workflow
+# na aba Actions - nao precisa de workflow_dispatch separado pra isso.
 on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "Ambiente de destino (precisa existir em Settings > Environments)"
-        required: false
-        default: production
+  workflow_run:
+    workflows: ["Build and Tests"]
+    types: [completed]
+    branches: [main]
 
-# id-token: write e o que permite o login OIDC abaixo (azure/login) sem guardar nenhum
-# segredo de longa duracao (publish profile / client secret) no repositorio.
+# actions: read e o que permite baixar o artefato de outra run (o download-artifact precisa
+# disso pra puxar de um workflow diferente do atual). id-token: write e o login OIDC do Azure.
 permissions:
+  actions: read
   id-token: write
   contents: read
 
@@ -22,34 +28,30 @@ env:
   AZURE_WEBAPP_NAME: cashflow-auth
 
 jobs:
-  build-and-deploy:
-    # workflow_dispatch deixa escolher qualquer branch no disparo manual (dropdown da UI do
-    # GitHub) - essa condicao trava o job pra so rodar de verdade quando o branch for main,
-    # mesmo que alguem selecione outro por engano (o job aparece como "skipped", nao falha).
-    if: github.ref == 'refs/heads/main'
+  deploy:
+    # So continua se o build.yml realmente passou (nao roda em build falho) e foi em main
+    # (o filtro "branches: main" do gatilho acima ja restringe isso, esta condicao e redundancia
+    # defensiva, nao custa nada ter as duas).
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'production' }}
-    timeout-minutes: 20
+    environment: CashflowAuth
+    timeout-minutes: 15
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      # Baixa o jar publicado pelo build.yml (mesmo commit que passou nos testes, inclusive
+      # os de arquitetura) - nao ha "Set up JDK"/"mvn" aqui porque nao se builda nada de novo.
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
         with:
-          distribution: temurin
-          java-version: "21"
-          cache: maven
-
-      # Nao pula teste antes de deploy - inclui os testes de arquitetura (ArchUnit).
-      - name: Build, test and package
-        run: mvn -B -ntp verify
+          name: cashflow-auth-jar
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: target
 
       # Login via OIDC (Workload Identity Federation) - configure no Azure:
       # 1. App registration no Entra ID com federated credential apontando para este repo/branch/environment
       # 2. AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID como Secrets do Environment
-      #    (Settings > Environments > production > Environment secrets)
+      #    (Settings > Environments > CashflowAuth > Environment secrets)
       # Alternativa mais simples (porem menos segura, guarda segredo de longa duracao):
       # trocar este passo + o de deploy abaixo por azure/webapps-deploy com
       # `publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}`.
