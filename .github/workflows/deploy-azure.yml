@@ -1,0 +1,71 @@
+name: Deploy to Azure App Service
+
+# So dispara manualmente de proposito - este servico assina token de producao, um deploy
+# automatico a cada push para main e um risco maior do que o beneficio de continuous deployment
+# aqui. Se quiser CD de verdade depois, adicione um gatilho "push: branches: [main]".
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Ambiente de destino (precisa existir em Settings > Environments)"
+        required: false
+        default: production
+
+# id-token: write e o que permite o login OIDC abaixo (azure/login) sem guardar nenhum
+# segredo de longa duracao (publish profile / client secret) no repositorio.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  # TODO: troque para o nome real do App Service (Azure Portal > App Service > Overview > Name).
+  AZURE_WEBAPP_NAME: cashflow-auth
+
+jobs:
+  build-and-deploy:
+    # workflow_dispatch deixa escolher qualquer branch no disparo manual (dropdown da UI do
+    # GitHub) - essa condicao trava o job pra so rodar de verdade quando o branch for main,
+    # mesmo que alguem selecione outro por engano (o job aparece como "skipped", nao falha).
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # Nao pula teste antes de deploy - inclui os testes de arquitetura (ArchUnit).
+      - name: Build, test and package
+        run: mvn -B -ntp verify
+
+      # Login via OIDC (Workload Identity Federation) - configure no Azure:
+      # 1. App registration no Entra ID com federated credential apontando para este repo/branch/environment
+      # 2. AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID como Secrets do Environment
+      #    (Settings > Environments > production > Environment secrets)
+      # Alternativa mais simples (porem menos segura, guarda segredo de longa duracao):
+      # trocar este passo + o de deploy abaixo por azure/webapps-deploy com
+      # `publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}`.
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy jar to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          package: target/*.jar
+
+      - name: Azure logout
+        if: always()
+        run: az logout
