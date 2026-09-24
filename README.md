@@ -1,19 +1,21 @@
 # cashflow-auth
 
-Serviço de **identidade** do ecossistema Cashflow. Responsabilidade única: **autenticar um
-usuário (email + senha) e devolver um JWT assinado com RS256**. Nada mais — sem domínio de
-negócio, sem CRUD, sem UI.
+Serviço de **identidade** do ecossistema Cashflow. Responsabilidade única: **autenticar via
+login social (Google ou Microsoft) e devolver um JWT assinado com RS256**. Não há login por
+senha. Nada mais — sem domínio de negócio, sem CRUD, sem UI.
 
 Os outros serviços (**cashflow** .NET, **cashflow-investimentos** Java) deixam de compartilhar
 um segredo HMAC e passam a **validar o token com a chave pública** publicada aqui em
 `GET /.well-known/jwks.json`. A chave privada nunca sai deste serviço.
 
 ```
-                            ┌────────────────────────────┐
-  POST /api/token  ───────▶ │        cashflow-auth       │  assina com a CHAVE PRIVADA (RSA)
-  {email, password}         │  - confere senha (bcrypt)  │
-                            │  - emite JWT RS256         │
-                            └────────────┬───────────────┘
+                            ┌─────────────────────────────┐
+  POST /api/token/oauth ──▶ │        cashflow-auth        │  assina com a CHAVE PRIVADA (RSA)
+  {provider, idToken}       │  - valida o ID token        │
+  (token do Google/MS)      │    com o provider           │
+                            │  - cria o usuário (1º login)│
+                            │  - emite JWT RS256          │
+                            └────────────┬────────────────┘
                                          │  GET /.well-known/jwks.json  (chave PÚBLICA)
                  ┌───────────────────────┼───────────────────────┐
                  ▼                       ▼                       ▼
@@ -21,7 +23,7 @@ um segredo HMAC e passam a **validar o token com a chave pública** publicada aq
         valida o JWT com a chave pública — offline, sem chamar o auth por request
 ```
 
-- **O quê** (contrato, formato do token, JWKS, rotação de chave): [`docs/especificacao.md`](docs/especificacao.md)
+- **O quê** (contrato, formato do token, JWKS, login social, rotação de chave): [`docs/especificacao.md`](docs/especificacao.md)
 - **Como** (camadas, pacotes, wiring, testes): [`docs/arquitetura.md`](docs/arquitetura.md)
 - **Migração** dos dois apps de HMAC-SHA256 → RS256: [`docs/migracao-hs256-rs256.md`](docs/migracao-hs256-rs256.md)
 
@@ -39,21 +41,24 @@ assimétrica separa os papéis: **só o auth assina; todo o resto só verifica**
 | Item | Onde |
 |------|------|
 | Projeto Spring Boot 3.4 / Java 21 | [`pom.xml`](pom.xml) |
-| `POST /api/token` — email+senha → JWT RS256 | [`TokenController`](src/main/java/com/cashflow/auth/adapter/in/web/TokenController.java) → [`IssueTokenService`](src/main/java/com/cashflow/auth/application/service/IssueTokenService.java) |
+| `POST /api/token/oauth` — ID token Google/Microsoft → JWT RS256 | [`OAuthTokenController`](src/main/java/com/cashflow/auth/adapter/in/web/OAuthTokenController.java) → [`AuthenticateWithProviderService`](src/main/java/com/cashflow/auth/application/service/AuthenticateWithProviderService.java) |
+| Validação do ID token de cada provider (JWKS remoto, `iss`, `aud`) | [`GoogleIdTokenValidatorAdapter`](src/main/java/com/cashflow/auth/adapter/out/oauth/GoogleIdTokenValidatorAdapter.java) · [`MicrosoftIdTokenValidatorAdapter`](src/main/java/com/cashflow/auth/adapter/out/oauth/MicrosoftIdTokenValidatorAdapter.java) |
+| Usuários em `auth.AuthIdentity` (schema próprio, migrations com Flyway) | [`JdbcAuthIdentityAdapter`](src/main/java/com/cashflow/auth/adapter/out/persistence/JdbcAuthIdentityAdapter.java) · [`db/migration`](src/main/resources/db/migration) |
 | `GET /.well-known/jwks.json` — chaves públicas | [`JwksController`](src/main/java/com/cashflow/auth/adapter/in/web/JwksController.java) |
 | Assinatura RS256 + construção do JWKS (Nimbus) | [`SigningKeys`](src/main/java/com/cashflow/auth/config/SigningKeys.java) + [`NimbusRsaTokenSigner`](src/main/java/com/cashflow/auth/adapter/out/token/NimbusRsaTokenSigner.java) |
-| Verificação de senha compatível com o BCrypt "enhanced" do .NET | [`EnhancedBCryptPasswordVerifier`](src/main/java/com/cashflow/auth/domain/password/EnhancedBCryptPasswordVerifier.java) |
-| Leitura da tabela `[User]` do Cashflow (só leitura) | [`JdbcUserAdapter`](src/main/java/com/cashflow/auth/adapter/out/persistence/JdbcUserAdapter.java) |
 | `GET /actuator/health` | starter actuator |
 
 **Ainda não** (ver `docs/especificacao.md` §8): rotação de chave automatizada, refresh tokens,
-`POST /oauth/introspect`, endpoint OIDC discovery, migração do cadastro de usuário para cá.
+`POST /oauth/introspect`, endpoint OIDC discovery, mapeamento entre os ids deste serviço e os
+usuários já existentes no Cashflow .NET.
 
 ## Pré-requisitos
 
 - JDK 21
 - Maven 3.9+ (sem wrapper commitado ainda — `mvn -N wrapper:wrapper` se quiser `./mvnw`)
-- Docker (SQL Server local com um usuário de teste)
+- Docker (SQL Server local)
+- Um app registrado no **Google Cloud Console** e/ou no **Microsoft Entra ID** (os client ids
+  vão em `AUTH_OAUTH_*`, ver `.env.example`)
 
 ## Subir o banco de teste
 
@@ -62,14 +67,15 @@ cd cashflow-auth
 cp .env.example .env          # ajuste as senhas se quiser
 docker compose --env-file .env up -d
 
-# cria a tabela [User] e um usuario de teste (teste@cashflow.local / Cashflow@123):
+# cria o banco. O Flyway cria o schema "auth" e a tabela quando a aplicação sobe,
+# mas não cria o banco em si:
 docker exec -i cashflow-auth-db /opt/mssql-tools18/bin/sqlcmd \
   -C -S localhost -U sa -P "$(grep DATABASE_PASSWORD .env | cut -d= -f2)" \
-  -i /dev/stdin < local/seed.sql
+  -Q "IF DB_ID('cashflow') IS NULL CREATE DATABASE cashflow"
 ```
 
-Em produção **não** se usa `local/seed.sql`: `DATABASE_URL` aponta para o banco real do
-Cashflow .NET, que já tem `[User]` e os cadastros.
+Em produção `DATABASE_URL` aponta para um SQL Server onde o Flyway cria o schema `auth` — pode
+ser o mesmo banco do Cashflow .NET, o serviço não toca nas tabelas dele.
 
 ## Rodar
 
@@ -90,17 +96,18 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out local/keys/act
 ### Provar a emissão + validação assimétrica
 
 ```bash
-# 1. login -> JWT RS256
-curl -s localhost:9000/api/token \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"teste@cashflow.local","password":"Cashflow@123"}'
-# -> {"id":1,"email":"teste@cashflow.local","token":"<jwt>","expiresIn":3600}
-
-# 2. chave publica que qualquer servico usa para validar
+# 1. chave publica que qualquer servico usa para validar (nao precisa de provider)
 curl -s localhost:9000/.well-known/jwks.json
-# -> {"keys":[{"kty":"RSA","kid":"dev","use":"sig","alg":"RS256","n":"...","e":"AQAB"}]}
+# -> {"keys":[{"kty":"RSA","kid":"2026-09","use":"sig","alg":"RS256","n":"...","e":"AQAB"}]}
 
-# 3. inspecione o token em jwt.io: header {alg:RS256, kid:dev}, claims {iss, sub, exp, email, ...}
+# 2. login social -> JWT RS256. Precisa de um ID token REAL do provider (obtido no frontend
+#    com Google Sign-In / MSAL) e dos AUTH_OAUTH_* configurados para esse mesmo app:
+curl -s localhost:9000/api/token/oauth \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"GOOGLE","idToken":"<id token do provider>"}'
+# -> {"id":1,"email":"voce@exemplo.com","token":"<jwt>","expiresIn":3600}
+
+# 3. inspecione o token em jwt.io: header {alg:RS256, kid:2026-09}, claims {iss, sub, exp, email, ...}
 ```
 
 ## Testes
@@ -110,14 +117,13 @@ mvn test
 ```
 
 - `NimbusRsaTokenSignerTest` — ida-e-volta assimétrica: assina com a privada, valida só com o JWKS público.
-- `EnhancedBCryptPasswordVerifierTest` — compatibilidade do hash de senha com o .NET (o caso
-  `valida_hash_real_do_dotnet` está `@Disabled` até colar um hash real do Cashflow — ver
-  `docs/especificacao.md` §6).
 
 ## Notas de configuração
 
 - **A chave privada nunca é versionada.** Em produção vem de um secret manager, injetada em
   `AUTH_PRIVATE_KEY_PEM` (ou um caminho de arquivo, se preferir adaptar `SigningKeys`).
 - **`AUTH_ISSUER`** precisa ser idêntico ao valor que os consumidores esperam na claim `iss`.
-- O `[User]` lido aqui **continua sendo propriedade do Cashflow .NET** enquanto o cadastro
-  não migrar para cá (ver `docs/especificacao.md` §7).
+- Os **client ids** (`AUTH_OAUTH_*`) precisam ser os do mesmo app que emitiu o ID token: o
+  serviço rejeita tokens cujo `aud` seja outro.
+- O `id` no token é o de `auth.AuthIdentity`, **não** o id de usuário do Cashflow .NET (ver
+  `docs/especificacao.md` §7.3).

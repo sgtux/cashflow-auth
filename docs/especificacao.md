@@ -5,51 +5,55 @@ o plano de corte dos consumidores está em [`migracao-hs256-rs256.md`](./migraca
 
 ## 1. Visão geral e decisões
 
-- **Responsabilidade única: emitir token.** O `cashflow-auth` autentica e assina um JWT. Ele
-  **não** valida Bearer token de ninguém, não tem domínio de negócio, não tem tela. Se um dia
-  precisar de "quem sou eu", isso é um endpoint dos serviços consumidores, não daqui.
+- **Responsabilidade única: autenticar via login social e emitir token.** O `cashflow-auth`
+  recebe o ID token que o frontend obteve do **Google** ou da **Microsoft**, valida esse token
+  com o provider, cria o usuário no primeiro login e assina um JWT próprio. Ele **não** valida
+  Bearer token de ninguém, não tem domínio de negócio, não tem tela.
+- **Sem login por senha.** Não existe email+senha, hash de senha, cadastro nem reset aqui: a
+  identidade de um usuário é sempre a de um provider. Não há `POST /api/token` com senha.
 - **Criptografia assimétrica (RS256).** A chave **privada** RSA vive só neste serviço e só
   serve para **assinar**. A chave **pública** é distribuída via JWKS e serve para **verificar**.
-  Assim, comprometer um serviço consumidor não permite **forjar** tokens — no esquema atual
+  Assim, comprometer um serviço consumidor não permite **forjar** tokens — no esquema anterior
   (HMAC-SHA256 com segredo compartilhado) qualquer serviço que valida também pode emitir.
 - **Validação offline nos consumidores.** Cada consumidor baixa o JWKS uma vez, cacheia, e
   valida assinatura + `exp` + `iss` localmente. Não há chamada ao `cashflow-auth` por
   request. O JWKS só é rebuscado quando aparece um `kid` desconhecido ou o cache expira.
-- **Sem OAuth2/OIDC completo (por enquanto).** Um `POST /api/token` com `{email, password}` e
-  um JWKS resolvem o caso de uso real (login de usuário para SPAs próprias). Spring
-  Authorization Server / fluxo `authorization_code` + PKCE + discovery seria peso sem
-  benefício agora — a seção 8 lista o caminho se isso mudar.
-- **Compatível com o token de hoje.** O formato de claims mantém a claim de URI longa que o
-  .NET emite atualmente (`http://schemas.xmlsoap.org/ws/2005/05/identity/claims/sid`), para
-  os consumidores migrarem a validação sem reescrever a extração de `userId` no mesmo passo.
+- **Consome OIDC, não é um Authorization Server.** O serviço só *verifica* ID tokens de
+  providers externos (`POST /api/token/oauth`). Não implementa `authorization_code` + PKCE,
+  consent nem discovery — Spring Authorization Server seria peso sem benefício agora; a seção 8
+  lista o caminho se isso mudar.
+- **Compatível com o token anterior.** O formato de claims mantém a claim de URI longa que o
+  .NET emitia (`http://schemas.xmlsoap.org/ws/2005/05/identity/claims/sid`), para os
+  consumidores migrarem a validação sem reescrever a extração de `userId` no mesmo passo.
 
-## 2. Contrato — emissão de token
+## 2. Contrato
 
-### `POST /api/token`
+### `POST /api/token/oauth`
 
-Mesmo path e mesmo corpo que a API .NET expõe hoje, de propósito: o proxy de login do
-cashflow-investimentos passa a apontar para cá trocando só a base URL.
+Troca um ID token de um provider por um token de aplicação.
 
 Requisição:
 ```json
-{ "email": "usuario@exemplo.com", "password": "senha123" }
+{ "provider": "GOOGLE", "idToken": "<id token (JWT) recebido do provider no frontend>" }
 ```
+`provider` é `"GOOGLE"` ou `"MICROSOFT"` (maiúsculas, o nome exato).
 
 Resposta — sucesso (200):
 ```json
 { "id": 42, "email": "usuario@exemplo.com", "token": "<jwt RS256>", "expiresIn": 3600 }
 ```
+`id` é o `Id` do usuário em `auth.AuthIdentity` (ver §7).
 
-Resposta — falha (401), email/senha errados ou conta sem senha:
+Resposta — falha (401), ID token inválido (assinatura, `iss`/`aud` errados, claim obrigatória
+ausente) ou expirado:
 ```json
-{ "message": "Credenciais inválidas" }
+{ "message": "Token do provider invalido" }
 ```
+Hoje só o validador da Microsoft distingue o token **expirado** (401 com mensagem própria);
+o do Google devolve a mensagem genérica também nesse caso.
 
-Outras respostas: `400` (corpo inválido — email malformado / campo em branco), `503` (banco
-de usuários indisponível), `500` (inesperado). Sempre no envelope `{ "message": "..." }`.
-
-> A mensagem de 401 é **única** para email inexistente, conta sem senha e senha errada — não
-> revela qual foi, para não permitir enumeração de usuários.
+Outras respostas: `400` (corpo inválido — `provider` ausente ou `idToken` em branco), `503`
+(banco indisponível), `500` (inesperado). Sempre no envelope `{ "message": "..." }`.
 
 ### `GET /.well-known/jwks.json`
 
@@ -76,21 +80,25 @@ Conjunto de chaves **públicas** (JWK Set, RFC 7517). É tudo que um consumidor 
 
 ### `GET /actuator/health`
 
-Liveness/readiness. `503` se o banco de usuários não responde.
+Liveness/readiness. `503` se o banco não responde.
 
 ## 3. Configuração
 
-Tudo por variável de ambiente (prefixo `auth.*` em `application.yml`). Ver `.env.example`.
+Tudo por variável de ambiente (prefixos `auth.*` e `auth.oauth.*` em `application.yml`). Ver
+`.env.example`.
 
 | variável | descrição |
 |---|---|
-| `DATABASE_URL` / `DATABASE_USERNAME` / `DATABASE_PASSWORD` | conexão JDBC com o banco que tem a tabela `[User]` (o banco do Cashflow .NET em produção) |
+| `DATABASE_URL` / `DATABASE_USERNAME` / `DATABASE_PASSWORD` | conexão JDBC com o SQL Server onde vive o schema `auth` (§7). O banco precisa existir |
 | `AUTH_ISSUER` | valor da claim `iss`; os consumidores exigem este valor exato |
 | `AUTH_TOKEN_TTL_MINUTES` | tempo de vida do token (default 60) |
 | `AUTH_ACTIVE_KID` | `kid` da chave que assina; precisa existir no JWKS |
 | `AUTH_PRIVATE_KEY_PEM` | chave privada RSA ativa, PEM PKCS#8; vazio em dev usa chave efêmera |
 | `AUTH_ADDITIONAL_JWKS` | JSON com chaves **públicas** antigas ainda aceitas (rotação) |
 | `AUTH_DEV_GENERATE_KEY` | dev: gera par efêmero se não há `AUTH_PRIVATE_KEY_PEM`. **`false` em produção** |
+| `AUTH_OAUTH_GOOGLE_CLIENT_ID` | client ID do app no Google Cloud Console; valida `aud` |
+| `AUTH_OAUTH_MICROSOFT_CLIENT_ID` | client ID (Application ID) do app no Microsoft Entra ID; valida `aud` |
+| `AUTH_OAUTH_MICROSOFT_TENANT_ID` | tenant ID do Microsoft Entra ID |
 | `SERVER_PORT` | porta HTTP (default 9000) |
 
 ## 4. Formato do JWT
@@ -106,9 +114,9 @@ O `kid` diz ao consumidor qual chave do JWKS usar — essencial para rotação s
 | claim | exemplo | observação |
 |---|---|---|
 | `iss` | `https://auth.cashflow.example.com` | = `AUTH_ISSUER`. Consumidor valida igualdade exata. |
-| `sub` | `"42"` | id do usuário, string. Claim padrão — consumidores novos devem ler daqui. |
+| `sub` | `"42"` | id do usuário (`auth.AuthIdentity.Id`), string. Claim padrão — consumidores novos devem ler daqui. |
 | `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/sid` | `"42"` | **compatibilidade**: é onde os consumidores atuais leem o id hoje. Removível ao fim da migração (§8). |
-| `email` | `"usuario@exemplo.com"` | conveniência. |
+| `email` | `"usuario@exemplo.com"` | email confirmado pelo provider. |
 | `iat` | `1757520000` | emissão. |
 | `exp` | `1757523600` | `iat + AUTH_TOKEN_TTL_MINUTES`. Consumidor **deve** validar. |
 | `jti` | `"9f1c..."` | id único do token; base para blocklist/introspect no futuro. |
@@ -133,6 +141,7 @@ chave no JWKS com outro `kty`/`alg`), mas não no mesmo passo da migração.
   na subida. É efêmero (muda a cada restart); como os consumidores rebuscam o JWKS ao ver um
   `kid` novo, isso não trava o fluxo local.
 - O serviço publica no JWKS a pública da chave ativa **+** as de `AUTH_ADDITIONAL_JWKS`.
+- Sem `AUTH_PRIVATE_KEY_PEM` e com `AUTH_DEV_GENERATE_KEY=false`, a aplicação **não sobe**.
 
 ### 5.2 Rotação (runbook)
 
@@ -152,66 +161,104 @@ Sem downtime e sem invalidar tokens já emitidos:
 **não** publicar a comprometida no JWKS — todos os tokens assinados por ela deixam de validar
 na hora (é o efeito desejado). Avisar que os usuários vão precisar logar de novo.
 
-## 6. Verificação de senha — compatibilidade com o .NET
+## 6. Login social (OAuth)
 
-O cadastro do Cashflow grava a senha com
-`BCrypt.Net.BCrypt.EnhancedHashPassword(senha, 12, HashType.SHA512)`
-(`Api/Utils/CryptographyUtils.cs`). "Enhanced" quer dizer:
+### 6.1 Fluxo
 
-```
-bcrypt( Base64( SHA-512( utf8(senha) ) ), custo=12 )
-```
+O frontend já fez o login com o provider (Google Sign-In / MSAL) e tem um **ID token** (JWT
+OIDC assinado pelo provider). O `cashflow-auth`:
 
-`EnhancedBCryptPasswordVerifier` reproduz exatamente isso. **Ponto de atenção — limite de 72
-bytes do bcrypt**: o Base64 de um SHA-512 tem 88 bytes. O verifier usa a estratégia
-`truncate` (corta em 72, comportamento clássico do bcrypt em C). Isso **precisa ser conferido
-contra um hash real** do BCrypt.Net:
+1. Recebe `POST /api/token/oauth` com `{ provider, idToken }`.
+2. Valida o ID token **localmente**, sem round-trip por request: verifica a assinatura com o
+   JWKS público do provider (cacheado), além de `iss`, `aud` e `exp` (§6.2).
+3. Busca o email confirmado em `auth.AuthIdentity`; se não existe, cria o registro (primeiro
+   login daquela pessoa).
+4. Assina e devolve o token de aplicação (§4).
 
-```
-# no projeto Cashflow, num teste ou REPL:
-Console.WriteLine(CryptographyUtils.PasswordHash("Cashflow@123"));
-```
+### 6.2 Validação do ID token, por provider
 
-Cole o resultado em `EnhancedBCryptPasswordVerifierTest#valida_hash_real_do_dotnet`, remova o
-`@Disabled` e rode. Se falhar, as hipóteses, em ordem:
+| | Google | Microsoft (Entra ID) |
+|---|---|---|
+| JWKS | `https://www.googleapis.com/oauth2/v3/certs` | `https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys` |
+| `iss` exigido | `https://accounts.google.com` | `https://login.microsoftonline.com/{tenant}/v2.0` |
+| `aud` exigido | `AUTH_OAUTH_GOOGLE_CLIENT_ID` | `AUTH_OAUTH_MICROSOFT_CLIENT_ID` |
+| Claims obrigatórias | `sub`, `email`, `exp` | `sub`, `exp` |
+| Email usado | `email`, e `email_verified` tem de ser `true` | `email`; se ausente, `preferred_username` |
 
-1. BCrypt.Net-Next **não trunca** — ele hasheia-para-caber. Trocar `truncate` por uma
-   estratégia equivalente (ou aplicar outro SHA-256 sobre o Base64).
-2. O default "enhanced" real é **SHA-384** (Base64 = 64 bytes, cabe em 72 sem truncar) e o
-   `HashType.SHA512` explícito no código muda só o pré-hash — conferir a lib.
-3. Encoding do pré-hash é hex, não Base64.
+Assinatura `RS256` nos dois. Toda falha de validação devolve 401; só o validador da Microsoft
+separa o caso "token expirado" (mensagem própria) do restante (mensagem genérica).
 
-Enquanto isso não for validado, tratar o login por senha como **não homologado**. Alternativa
-de menor risco para a fase 1: o `cashflow-auth` **delega** a checagem de senha para o
-`POST /api/token` do .NET (server-to-server) e só re-emite como RS256 — ver
-`migracao-hs256-rs256.md` §Fase 1, opção B.
+O claim `email` da Microsoft só vem preenchido se o app registration pedir o *optional claim*
+`email` no Entra ID; o fallback para `preferred_username` (o UPN da conta) costuma ser um email
+válido em contas corporativas/escolares, mas não é garantido.
 
-Contas criadas via Google (`Password` nulo na tabela) **não logam por senha** aqui — retornam
-401. Login social, se necessário, é um endpoint à parte no futuro (§8).
+### 6.3 Como a identidade é resolvida
 
-## 7. Propriedade dos dados
+A busca é **por email**, sem olhar o provider: quem loga com o mesmo email pelo Google e pela
+Microsoft cai no **mesmo** usuário (o primeiro provider fica registrado). `Provider` e
+`ExternalSubject` (o `sub` do provider) são gravados na criação, mas hoje **não** entram na
+busca. Consequência: se a pessoa trocar o email na conta do provider, ela vira um usuário novo.
+Passar a buscar por `(Provider, ExternalSubject)` resolveria isso sem migration.
 
-O `cashflow-auth` **lê** a tabela `[User]` (colunas `Id`, `Email`, `Password`) mas **não é
-dono dela**: cadastro, plano, limites, `RecordsUsed` etc. continuam no Cashflow .NET, que
-escreve nessa tabela. O `cashflow-auth` só precisa de identidade + credencial.
+### 6.4 Limitações conhecidas
 
-Fim de jogo desejável (fora do escopo deste scaffold): mover cadastro/reset de senha para o
-`cashflow-auth`, e o `[User]` (ou ao menos `Email`/`Password`) passa a ser propriedade dele,
-com o Cashflow .NET lendo o id via token como qualquer outro consumidor. Só vale o esforço se
-o cadastro precisar evoluir de forma independente do Cashflow.
+- **Microsoft só com tenant fixo** (`AUTH_OAUTH_MICROSOFT_TENANT_ID`). O endpoint multi-tenant
+  (`/common/`) emite um `iss` diferente por tenant; suportá-lo exigiria trocar a comparação
+  exata de issuer por uma regra de padrão/prefixo.
+- **Criação não é atômica com a busca.** Dois primeiros logins simultâneos do mesmo email
+  podem tentar inserir duas vezes; a constraint `UNIQUE` em `Email` faz a segunda falhar, em vez
+  de duplicar o registro.
+
+## 7. Dados e migrations
+
+### 7.1 Propriedade dos dados
+
+O `cashflow-auth` possui **um schema**, `auth`, com **uma tabela**, `auth.AuthIdentity`:
+
+| coluna | tipo | |
+|---|---|---|
+| `Id` | `INT IDENTITY` | vira `sub`/`sid` no token |
+| `Email` | `VARCHAR(255)` `UNIQUE` | chave de busca (§6.3) |
+| `Provider` | `VARCHAR(20)` | `GOOGLE` ou `MICROSOFT` |
+| `ExternalSubject` | `VARCHAR(255)` | claim `sub` do provider |
+| `CreatedAt` | `DATETIME` | default `GETUTCDATE()` |
+
+O serviço **não lê nem escreve nenhuma tabela do Cashflow .NET**. O banco pode até ser o mesmo
+banco físico dele; o schema separado é o que deixa a posse inequívoca no próprio banco, e é o
+que torna seguro rodar Flyway ali (§7.2).
+
+### 7.2 Migrations
+
+Flyway, com `spring.flyway.schemas: auth`: ele **só enxerga** o schema `auth` e nunca `dbo` ou
+qualquer outro. O schema `auth` é criado automaticamente na primeira subida; o **banco** em si
+precisa existir antes (o Flyway cria schema e tabelas, não o banco).
+
+Migrations em `src/main/resources/db/migration/`, versionadas por timestamp
+(`V20260919141959__create_auth_identity.sql`, ...) em vez de inteiro sequencial (`V1`, `V2`) —
+evita conflito de número entre branches/PRs concorrentes. Regra: nenhuma migration toca em algo
+fora do schema `auth`.
+
+### 7.3 Consequência para os consumidores
+
+O id no token (`sub`/`sid`) é o `auth.AuthIdentity.Id`, um espaço de ids **próprio**, sem
+relação com os ids de usuário do Cashflow .NET. Consumidores que usam esse id para achar dados
+próprios (plano, carteira, registros) precisam decidir como mapeá-lo — ver "Ponto em aberto" em
+[`migracao-hs256-rs256.md`](./migracao-hs256-rs256.md).
 
 ## 8. Roteiro
 
-1. **Scaffold** (feito): `POST /api/token` assinando RS256 com chave de config/efêmera,
-   `GET /.well-known/jwks.json`, verificação de senha, leitura do `[User]`, health.
-2. **Homologar o hash de senha** contra o BCrypt.Net real (§6) — ou plugar a opção B (delegar
-   ao .NET) se a compatibilidade não fechar rápido.
-3. **Migrar os consumidores** para validar RS256 via JWKS — ver `migracao-hs256-rs256.md`.
+1. **Scaffold** (feito): `POST /api/token/oauth` (Google + Microsoft), JWKS, assinatura RS256
+   com chave de config/efêmera, schema `auth` com Flyway, health.
+2. **Migrar os consumidores** para validar RS256 via JWKS — ver `migracao-hs256-rs256.md`.
+3. **Definir o mapeamento de identidade** com os ids de usuário do Cashflow .NET (ponto em
+   aberto na migração), antes de virar os consumidores.
 4. **Rotação de chave** como job/runbook versionado (hoje é manual via env).
-5. **Refresh token** (tabela própria + `POST /api/token/refresh` + revogação) se o TTL curto
+5. **Buscar por `(Provider, ExternalSubject)`** em vez de só por email (§6.3), e tratar a
+   corrida da criação (§6.4).
+6. **Microsoft multi-tenant**, se aparecer cliente que precise (§6.4).
+7. **Refresh token** (tabela própria + `POST /api/token/refresh` + revogação) se o TTL curto
    incomodar a UX.
-6. **`POST /oauth/introspect`** e/ou blocklist por `jti` para revogação imediata.
-7. **OIDC discovery** (`/.well-known/openid-configuration`) e, se aparecer cliente
+8. **`POST /oauth/introspect`** e/ou blocklist por `jti` para revogação imediata.
+9. **OIDC discovery** (`/.well-known/openid-configuration`) e, se aparecer cliente
    third-party, `authorization_code` + PKCE — aí sim adotar o Spring Authorization Server.
-8. **Limpeza pós-migração**: remover a claim de URI longa, o segredo HMAC dos consumidores e o
-   endpoint `/api/token` do .NET.
+10. **Limpeza pós-migração**: remover a claim de URI longa e o segredo HMAC dos consumidores.

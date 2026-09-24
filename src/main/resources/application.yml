@@ -6,12 +6,21 @@ spring:
   config:
     import: "optional:file:.env[.properties]"
 
-  # Aponta para o MESMO banco do Cashflow .NET (tabela [User]). Somente leitura de credenciais;
-  # este servico nunca escreve nem aplica DDL. Ver ./docs/arquitetura.md secao 4.
+  # Banco SQL Server onde vive o schema "auth" (auth.AuthIdentity). Pode ser o mesmo banco fisico
+  # do Cashflow .NET: o Flyway so enxerga o schema "auth" (ver abaixo). O banco precisa existir -
+  # o Flyway cria o schema e as tabelas, nao o banco. Ver ./docs/especificacao.md secao 7.
   datasource:
     url: ${DATABASE_URL}
     username: ${DATABASE_USERNAME:sa}
     password: ${DATABASE_PASSWORD}
+
+  # Migrations restritas ao schema "auth" - tudo que o cashflow-auth possui de verdade no banco
+  # (hoje so auth.AuthIdentity). O Flyway NUNCA enxerga nem toca o schema "dbo" (onde vivem as
+  # tabelas do Cashflow .NET, se o banco for compartilhado) porque ele nao esta na lista de
+  # schemas gerenciados. "auth" e criado automaticamente na primeira subida (create-schemas,
+  # default true). Ver ./docs/especificacao.md secao 7.
+  flyway:
+    schemas: auth
 
 server:
   port: ${SERVER_PORT:9000}
@@ -33,7 +42,7 @@ auth:
   # Tempo de vida do access token, em minutos.
   token-ttl-minutes: ${AUTH_TOKEN_TTL_MINUTES:60}
   # "kid" da chave ativa (a que assina). Precisa existir no JWKS publicado.
-  active-kid: ${AUTH_ACTIVE_KID:dev}
+  active-kid: ${AUTH_ACTIVE_KID:2026-09}
   # Chave privada RSA ativa, PEM PKCS#8 ("-----BEGIN PRIVATE KEY-----"). Em dev pode ficar vazia
   # (ver dev-generate-key). Em producao vem de um secret manager, NUNCA versionada.
   private-key-pem: ${AUTH_PRIVATE_KEY_PEM:}
@@ -44,6 +53,40 @@ auth:
   # DEVE ser false em producao.
   dev-generate-key: ${AUTH_DEV_GENERATE_KEY:true}
 
+  # Login social - troca de ID token (Google/Microsoft) por token de aplicacao via
+  # POST /api/token/oauth. Ver ./docs/especificacao.md secao 6.
+  oauth:
+    google:
+      # Client ID do app registrado no Google Cloud Console - valida a claim "aud" do ID token.
+      client-id: ${AUTH_OAUTH_GOOGLE_CLIENT_ID:}
+    microsoft:
+      # Client ID (Application ID) do app registrado no Microsoft Entra ID.
+      client-id: ${AUTH_OAUTH_MICROSOFT_CLIENT_ID:}
+      # Tenant ID do Microsoft Entra ID. So suporta um tenant fixo por enquanto (ver comentario em
+      # MicrosoftIdTokenValidatorAdapter).
+      tenant-id: ${AUTH_OAUTH_MICROSOFT_TENANT_ID:}
+
+# Ponte OTEL_* (.env) -> propriedades Spring "otel.*", que e o formato que o
+# opentelemetry-spring-boot-starter realmente le. As variaveis OTEL_* cruas (convencao do SDK
+# OpenTelemetry "puro") so sao lidas automaticamente se forem env vars REAIS do processo - um
+# .env carregado via spring.config.import vira Environment do Spring, nao env var de verdade,
+# entao sem esta ponte o starter cai nos defaults embutidos (ex: localhost:4318).
+otel:
+  sdk:
+    disabled: ${OTEL_SDK_DISABLED:false}
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}
+      headers: ${OTEL_EXPORTER_OTLP_HEADERS:token_api_123}
+      protocol: ${OTEL_EXPORTER_OTLP_PROTOCOL:http/protobuf}
+      timeout: ${OTEL_EXPORTER_OTLP_TIMEOUT:10000}
+      metrics:
+        temporality-preference: ${OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE:delta}
+  resource:
+    attributes: ${OTEL_RESOURCE_ATTRIBUTES:}
+
 logging:
   level:
-    com.cashflow.auth: DEBUG
+    com.cashflow.auth: INFO
+    io.opentelemetry: INFO
+

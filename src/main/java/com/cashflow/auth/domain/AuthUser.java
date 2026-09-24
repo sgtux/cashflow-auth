@@ -1,18 +1,13 @@
 package com.cashflow.auth.domain;
 
 /**
- * Usuario como o cashflow-auth precisa dele: identidade + hash de senha para conferir credenciais.
- * Nao ha entidade de dominio rica aqui - este servico so autentica e emite token, nao tem regra
- * de negocio de usuario (cadastro, plano, limites) - isso continua no Cashflow .NET.
+ * Usuario como o cashflow-auth precisa dele: so a identidade necessaria para assinar o token.
+ * Nao ha entidade de dominio rica aqui - este servico so autentica (via login social) e emite
+ * token, nao tem regra de negocio de usuario (cadastro, plano, limites).
  *
- * @param id           id numerico do usuario (vira as claims {@code sub} e a de compatibilidade).
- * @param email        email do usuario (vai na claim {@code email}).
- * @param passwordHash hash BCrypt "enhanced" armazenado pelo .NET; pode ser {@code null} para
- *                     contas so-Google, que nao logam por senha.
+ * @param id    id numerico do usuario em {@code auth.AuthIdentity} (vira as claims {@code sub} e a
+ *              de compatibilidade).
+ * @param email email do usuario, confirmado pelo provider (vai na claim {@code email}).
  */
-public record AuthUser(long id, String email, String passwordHash) {
-
-    public boolean hasPassword() {
-        return passwordHash != null && !passwordHash.isBlank();
-    }
+public record AuthUser(long id, String email) {
 }

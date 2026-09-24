@@ -15,15 +15,29 @@
     <artifactId>cashflow-auth</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <name>cashflow-auth</name>
-    <description>Servico de identidade do Cashflow: autentica e emite JWT assinado com RS256 (ver ./docs)</description>
+    <description>Servico de identidade do Cashflow: login social (Google/Microsoft) e emissao de JWT assinado com RS256 (ver ./docs)</description>
 
     <properties>
         <java.version>21</java.version>
-        <bcrypt.version>0.10.2</bcrypt.version>
         <!-- Nao e gerenciado pelo BOM do spring-boot-starter-parent; pinar explicitamente.
              9.47 e a linha alinhada com o Spring Security 6.4 (Spring Boot 3.4). -->
         <nimbus-jose-jwt.version>9.47</nimbus-jose-jwt.version>
     </properties>
+
+    <!-- Gerencia a versao do opentelemetry-spring-boot-starter (nao vem no BOM do Spring Boot).
+         "-alpha" porque o starter em si so e publicado nessa linha instavel do OpenTelemetry
+         ainda - nao ha uma opentelemetry-instrumentation-bom (estavel) que o cubra hoje. -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.opentelemetry.instrumentation</groupId>
+                <artifactId>opentelemetry-instrumentation-bom-alpha</artifactId>
+                <version>2.10.0-alpha</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -43,8 +57,8 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- Leitura da tabela [User] do Cashflow (credenciais). Nao ha JPA nem Flyway aqui:
-             este servico nao e dono de nenhum schema, so consulta. Ver ./docs/arquitetura.md secao 4. -->
+        <!-- Leitura/escrita de auth.AuthIdentity (usuarios de login social, schema proprio do
+             cashflow-auth). Sem JPA: ver ./docs/arquitetura.md secao 6. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
@@ -55,6 +69,19 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Migrations do schema "auth" (unica coisa que o cashflow-auth possui no banco; o
+             Flyway so enxerga esse schema, ver application.yml spring.flyway.schemas).
+             flyway-sqlserver e um modulo a parte porque o suporte a SQL Server nao vem no
+             flyway-core. Ver ./docs/especificacao.md secao 7. -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-sqlserver</artifactId>
+        </dependency>
+
         <!-- Assinatura RS256 + construcao do documento JWKS. Versao gerenciada pelo BOM do Spring Boot. -->
         <dependency>
             <groupId>com.nimbusds</groupId>
@@ -62,12 +89,9 @@
             <version>${nimbus-jose-jwt.version}</version>
         </dependency>
 
-        <!-- BCrypt "enhanced" (SHA-512 + Base64 antes do bcrypt) para bater com o
-             BCrypt.Net EnhancedVerify usado no cadastro do .NET. Ver ./docs/especificacao.md secao 6. -->
         <dependency>
-            <groupId>at.favre.lib</groupId>
-            <artifactId>bcrypt</artifactId>
-            <version>${bcrypt.version}</version>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-spring-boot-starter</artifactId>
         </dependency>
 
         <dependency>
@@ -80,6 +104,12 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+			<groupId>com.tngtech.archunit</groupId>
+			<artifactId>archunit-junit5</artifactId>
+			<version>1.5.0</version>
+			<scope>test</scope>
+		</dependency>
     </dependencies>
 
     <build>

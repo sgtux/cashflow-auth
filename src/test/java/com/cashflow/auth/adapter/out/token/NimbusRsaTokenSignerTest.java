@@ -27,7 +27,7 @@ class NimbusRsaTokenSignerTest {
 
     @Test
     void assina_um_jwt_rs256_verificavel_com_a_chave_publica_do_jwks() throws Exception {
-        String token = signer.sign(new AuthUser(42L, "user@cashflow.test", "irrelevante-aqui"));
+        String token = signer.sign(new AuthUser(42L, "user@cashflow.test"));
         SignedJWT jwt = SignedJWT.parse(token);
 
         assertThat(jwt.getHeader().getAlgorithm().getName()).isEqualTo("RS256");

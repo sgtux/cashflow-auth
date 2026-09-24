@@ -16,12 +16,14 @@ import java.util.List;
 
 /**
  * Este servico so <em>emite</em> token - ele nao valida Bearer token de ninguem, entao nao ha
- * filtro de JWT aqui. Tudo o que ele expoe ({@code /api/token}, o JWKS, o health) e publico;
- * a protecao real de {@code /api/token} e a checagem de senha no {@code IssueTokenService}.
+ * filtro de JWT aqui. Tudo o que ele expoe ({@code /api/token/oauth}, o JWKS, o health) e
+ * publico; a protecao real de {@code /api/token/oauth} e a validacao do ID token do provider
+ * (assinatura, issuer, audience) no {@code AuthenticateWithProviderService}.
  *
- * <p>CORS liberado ({@code *}) de proposito: {@code /api/token} e {@code /.well-known/jwks.json}
- * sao endpoints publicos chamados por origens diferentes (frontends, outros servicos). Nao ha
- * cookie nem credencial de browser em jogo - o token vai no corpo da resposta.</p>
+ * <p>CORS liberado ({@code *}) de proposito: {@code /api/token/oauth} e
+ * {@code /.well-known/jwks.json} sao endpoints publicos chamados por origens diferentes
+ * (frontends, outros servicos). Nao ha cookie nem credencial de browser em jogo - o token vai
+ * no corpo da resposta.</p>
  */
 @Configuration
 @EnableWebSecurity
@@ -34,7 +36,7 @@ public class SecurityConfig {
                 .cors(Customizer.withDefaults())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/token").permitAll()
+                        .requestMatchers("/api/token/oauth").permitAll()
                         .requestMatchers("/.well-known/jwks.json").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         .anyRequest().denyAll())

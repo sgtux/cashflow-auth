@@ -1,7 +1,9 @@
 package com.cashflow.auth.adapter.in.web;
 
 import com.cashflow.auth.adapter.in.web.dto.ErrorResponse;
-import com.cashflow.auth.domain.InvalidCredentialsException;
+import com.cashflow.auth.domain.InvalidProviderTokenException;
+import com.cashflow.auth.domain.TokenExpiredException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -17,8 +19,13 @@ public class ApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
-    @ExceptionHandler(InvalidCredentialsException.class)
-    public ResponseEntity<ErrorResponse> handleInvalidCredentials(InvalidCredentialsException ex) {
+    @ExceptionHandler(InvalidProviderTokenException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidProviderToken(InvalidProviderTokenException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new ErrorResponse(ex.getMessage()));
+    }
+
+    @ExceptionHandler(TokenExpiredException.class)
+    public ResponseEntity<ErrorResponse> handleTokenExpired(TokenExpiredException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new ErrorResponse(ex.getMessage()));
     }
 
@@ -33,7 +40,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<ErrorResponse> handleDbDown(DataAccessException ex) {
-        log.error("Falha ao consultar o banco de usuarios", ex);
+        log.error("Falha ao acessar o banco de dados", ex);
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(new ErrorResponse("Servico de autenticacao indisponivel"));
     }

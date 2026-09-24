@@ -9,10 +9,30 @@ validar os tokens do `cashflow-auth` com a **chave pública**, sem janela de ind
 |---|---|---|
 | **cashflow** (.NET) | Sim — `TokenController` + `JwtTokenBuilder`, HS256 | `AuthenticationMiddleware`, `SymmetricSecurityKey(ASCII(SECRET_JWT_KEY))` |
 | **cashflow-investimentos** (Java) | Não (faz proxy do login para o .NET) | `JwtTokenParser`, `Keys.hmacShaKeyFor(ASCII(SECRET_JWT_KEY))` |
-| **cashflow-auth** | Passará a ser o único emissor — RS256 | não valida token de ninguém |
+| **cashflow-auth** | Passará a ser o único emissor — RS256, **só via login social** (Google/Microsoft), sem senha | não valida token de ninguém |
 
 Ponto-chave: hoje **quem valida também consegue emitir** (mesmo segredo). O objetivo é que só
 o `cashflow-auth` tenha a chave de assinar.
+
+> **Consequência do "sem senha":** o `cashflow-auth` não tem login por email+senha. Enquanto o
+> login por senha do .NET existir, ele continua emitindo HS256 — então a Fase 4 (remover o HMAC)
+> só é possível quando **todos** os logins passarem pelo login social.
+
+## Ponto em aberto — identidade dos usuários
+
+O `sub`/`sid` dos tokens do `cashflow-auth` é o `Id` de `auth.AuthIdentity`, um espaço de ids
+**próprio** — não é o `Id` de usuário do Cashflow .NET. Hoje os dois consumidores leem esse id
+do token e o usam para achar os dados do usuário (plano, carteira, registros). Com o
+`cashflow-auth`, um mesmo usuário terá **um id diferente** do que tem hoje nesses sistemas.
+
+Isso precisa ser decidido **antes da Fase 3**. Caminhos possíveis (nenhum implementado):
+
+- cada consumidor resolve o **seu** usuário pelo claim `email` do token, em vez de pelo `sub`;
+- o `cashflow-auth` passa a guardar/emitir o id do sistema legado (exige um vínculo entre as
+  duas fontes de identidade, que hoje não existe).
+
+Enquanto isso não for resolvido, tokens emitidos pelo `cashflow-auth` não identificam
+corretamente os usuários já existentes nos consumidores.
 
 ## Princípio: aceitar os dois durante a sobreposição
 
@@ -35,22 +55,15 @@ senão (HS256):             validar via segredo compartilhado  [caminho legado, 
    de um secret manager — **não** a chave efêmera de dev).
 2. `AUTH_ISSUER` definido com o valor definitivo (ex.: `https://auth.cashflow.example.com`).
    Anote-o: os consumidores vão exigir esse valor exato na claim `iss`.
-3. `DATABASE_URL` apontando para o banco real do Cashflow (tabela `[User]`).
-4. **Homologar o hash de senha** contra o BCrypt.Net real (ver `especificacao.md` §6). Se não
-   fechar rápido, aplicar a **opção B** abaixo antes de seguir.
-5. Sanity: `curl .../api/token` devolve um JWT; `curl .../.well-known/jwks.json` devolve a
-   chave pública; o JWT valida em jwt.io contra essa chave.
+3. `DATABASE_URL` apontando para um SQL Server (o banco precisa existir; o Flyway cria o schema
+   `auth` e a tabela `AuthIdentity` na subida — pode ser o mesmo banco do Cashflow .NET, o
+   serviço não toca nas tabelas dele).
+4. Configurar os providers: `AUTH_OAUTH_GOOGLE_CLIENT_ID`, `AUTH_OAUTH_MICROSOFT_CLIENT_ID` e
+   `AUTH_OAUTH_MICROSOFT_TENANT_ID` (`especificacao.md` §3).
+5. Sanity: `POST .../api/token/oauth` com um ID token real devolve um JWT; `curl
+   .../.well-known/jwks.json` devolve a chave pública; o JWT valida em jwt.io contra essa chave.
 
 Neste ponto ninguém consome os tokens do `cashflow-auth` ainda.
-
-### Opção B (se a compatibilidade de senha não fechar) — delegar a checagem ao .NET
-
-Em vez de `JdbcUserAdapter` + `EnhancedBCryptPasswordVerifier`, o `cashflow-auth` chama o
-`POST /api/token` do .NET server-to-server só para **conferir a credencial**, ignora o token
-HS256 que volta, e **re-emite** um RS256 próprio a partir do `id`/`email` da resposta. Menos
-"correto" (mantém o .NET no caminho do login), mas remove o risco do hash e é reversível para
-a opção A quando o hash estiver homologado. É trocar a implementação de `LoadUserPort` por um
-adapter HTTP; o resto do serviço não muda.
 
 ---
 
@@ -138,22 +151,27 @@ Ao fim da Fase 2: um token de **qualquer** dos dois emissores é aceito pelos do
 
 ## Fase 3 — virar o emissor para o cashflow-auth
 
-1. **cashflow-investimentos**: apontar o proxy de login para o `cashflow-auth`. Hoje
-   `CashflowAuthHttpAdapter` chama `POST {cashflow.api.base-url}/api/token` — basta
-   `cashflow.api.base-url` (env `CASHFLOW_API_BASE_URL`) passar a ser a URL do `cashflow-auth`.
-   O path (`/api/token`) e o corpo (`{email, password}`) são iguais; a resposta
-   `{id, email, token, expiresIn}` é compatível com o que o adapter já procura.
-2. **Frontend(s)**: a tela de login do `cashflow` (.NET, `Site/`) passa a chamar o
-   `cashflow-auth` em vez do `/api/token` do próprio .NET. (O `web/` do investimentos continua
-   falando com o proxy da API Java, que agora repassa para o `cashflow-auth`.)
-3. **cashflow (.NET) `/api/token`**: deixar de ser chamado. Opcional: transformá-lo num proxy
-   fino para o `cashflow-auth` por uma release, para não quebrar clientes esquecidos, e depois
-   removê-lo.
+**Pré-requisito:** resolver o "Ponto em aberto — identidade dos usuários" acima.
+
+O `cashflow-auth` não tem login por senha, então **não dá para só trocar a base URL** do
+`POST /api/token` (email+senha) — o contrato mudou: agora é `POST /api/token/oauth` com um ID
+token de provider (`especificacao.md` §2).
+
+1. **Frontend(s)**: a tela de login passa a autenticar com o provider (Google Sign-In / MSAL) e
+   a enviar o ID token para `POST {cashflow-auth}/api/token/oauth`; o token de aplicação
+   devolvido substitui o que hoje vem do `/api/token` do .NET.
+2. **cashflow-investimentos**: o `CashflowAuthHttpAdapter` hoje repassa email+senha para o
+   `POST {cashflow.api.base-url}/api/token` do .NET. Esse proxy de senha deixa de fazer sentido;
+   o frontend fala direto com o `cashflow-auth` (ou o adapter passa a repassar o ID token para
+   `/api/token/oauth`).
+3. **cashflow (.NET) `/api/token`**: deixar de ser chamado. Opcional: mantê-lo por uma release
+   para clientes esquecidos, e depois removê-lo. Ele só pode ser removido quando **nenhum**
+   fluxo depender de login por senha.
 4. Observar logs/métricas: a partir daqui os tokens novos são todos RS256. Os HS256 ainda em
    circulação expiram em no máximo `COOKIE_EXPIRES_IN_MINUTES`.
 
-Rollback: reapontar `CASHFLOW_API_BASE_URL` e o frontend de volta para o `/api/token` do .NET.
-Como os consumidores ainda aceitam HS256 (Fase 2), a volta é imediata.
+Rollback: apontar o frontend de volta para o `/api/token` do .NET. Como os consumidores ainda
+aceitam HS256 (Fase 2), a volta é imediata.
 
 ---
 
@@ -181,15 +199,16 @@ mais nenhum HS256 válido em circulação:
 | `SECRET_JWT_KEY` | Fase 0–3; **removida na 4** | Fase 0–3; **removida na 4** | — (nunca) |
 | `AUTH_JWKS_URI` (nome à sua escolha) | some na Fase 2 | surge na Fase 2 | — |
 | `AUTH_ISSUER` / `ValidIssuer` | Fase 2 (ligado na 4) | Fase 2 (ligado na 4) | define (`AUTH_ISSUER`) |
-| `CASHFLOW_API_BASE_URL` | — | repontar p/ cashflow-auth na Fase 3 | — |
+| `CASHFLOW_API_BASE_URL` | — | deixa de ser o destino do login por senha na Fase 3 (§Fase 3, item 2) | — |
 | `AUTH_PRIVATE_KEY_PEM` / `AUTH_ACTIVE_KID` | — | — | Fase 1 (secret manager) |
+| `AUTH_OAUTH_GOOGLE_CLIENT_ID` / `AUTH_OAUTH_MICROSOFT_*` | — | — | Fase 1 |
 
 ## Checklist rápido
 
-- [ ] cashflow-auth no ar com chave estável e `AUTH_ISSUER` definitivo
-- [ ] hash de senha homologado contra BCrypt.Net **ou** opção B ativa
+- [ ] cashflow-auth no ar com chave estável, `AUTH_ISSUER` definitivo e providers configurados
+- [ ] **identidade dos usuários** decidida (ponto em aberto) — id do token vs. usuários existentes
 - [ ] consumidores aceitando RS256 **e** HS256 (Fase 2 em produção)
-- [ ] login dos frontends + proxy do investimentos apontando para o cashflow-auth (Fase 3)
+- [ ] login dos frontends via provider → `POST /api/token/oauth` (Fase 3)
 - [ ] decorrido o TTL máximo → HMAC e `SECRET_JWT_KEY` removidos dos dois (Fase 4)
 - [ ] `JwtTokenBuilder`/`TokenController` do .NET apagados
 - [ ] claim de URI longa removida do cashflow-auth

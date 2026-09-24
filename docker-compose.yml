@@ -1,7 +1,7 @@
 # SQL Server local SO para desenvolvimento do cashflow-auth isolado.
-# Em producao o cashflow-auth aponta DATABASE_URL para o MESMO banco do Cashflow .NET
-# (a tabela [User] e a fonte de identidade). Aqui subimos uma copia local so com um usuario
-# de teste (local/seed.sql) para poder rodar o servico sozinho.
+# Em producao o cashflow-auth aponta DATABASE_URL para um banco SQL Server onde o Flyway cria o
+# schema "auth" (pode ser o mesmo banco do Cashflow .NET). Aqui subimos um SQL Server local
+# para poder rodar o servico sozinho - o banco "cashflow" precisa ser criado a mao (ver README).
 #
 # Rede/porta diferentes das ja usadas por cashflow (172.31.31.0/24) e
 # cashflow-investimentos (172.31.32.0/24), para os tres rodarem juntos.

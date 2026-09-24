@@ -1,11 +1,11 @@
 package com.cashflow.auth.adapter.in.web.dto;
 
-import com.cashflow.auth.application.port.in.IssueTokenUseCase.IssuedToken;
+import com.cashflow.auth.application.port.in.AuthenticateWithProviderUseCase.IssuedToken;
 
 /**
- * Resposta de {@code POST /api/token}. {@code id} + {@code email} + {@code token} espelham o que o
- * cashflow-investimentos ja devolve hoje ao frontend no proxy de login; {@code expiresIn} (segundos)
- * e novo e opcional para o cliente.
+ * Resposta de {@code POST /api/token/oauth}. {@code id} + {@code email} + {@code token} espelham o
+ * que o cashflow-investimentos ja devolve hoje ao frontend no proxy de login; {@code expiresIn}
+ * (segundos) e novo e opcional para o cliente.
  */
 public record TokenResponse(long id, String email, String token, long expiresIn) {
 
