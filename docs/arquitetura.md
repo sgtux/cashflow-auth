@@ -10,14 +10,18 @@ registra onde a pureza hexagonal foi afrouxada de propósito.
 ## 1. Camadas
 
 ```
-        adapter/in/web         OAuthTokenController · JwksController · ApiExceptionHandler
+        adapter/in              ApiExceptionHandler · RequestTimingFilter
+                               controller/OAuthTokenController · controller/JwksController
+                               controller/mapper/OAuthTokenMapper
+                               controller/request/OAuthLoginRequest
+                               controller/response/TokenResponse · controller/response/ErrorResponse
               │  chama a porta de entrada
               ▼
-        application            AuthenticateWithProviderUseCase (porta in)
+        application            AuthenticateWithProviderInputPort (porta in)
                                AuthenticateWithProviderService (orquestração)
                                ValidateGoogleIdTokenOutputPort · ValidateMicrosoftIdTokenOutputPort
                                FindAuthIdentityByEmailOutputPort · CreateAuthIdentityOutputPort
-                               TokenSignerPort                                   (portas out)
+                               TokenSignerOutputPort                                   (portas out)
               │  usa o domínio
               ▼
         domain                 AuthUser · ProviderIdentity · OAuthProvider
@@ -27,10 +31,22 @@ registra onde a pureza hexagonal foi afrouxada de propósito.
         adapter/out            oauth/GoogleIdTokenValidatorAdapter
                                oauth/MicrosoftIdTokenValidatorAdapter
                                persistence/JdbcAuthIdentityAdapter
-                               token/NimbusRsaTokenSigner
-        config                 SigningKeys · AuthProperties · OAuthProperties
-                               SecurityConfig · RequestTimingFilter
+                               token/NimbusRsaTokenSigner · token/SigningKeys
+        config                 AuthProperties · OAuthProperties · SecurityConfig
 ```
+
+`config` guarda só o que é bind de propriedade (`@ConfigurationProperties`) e wiring de bean
+(`@Configuration`) - nada com lógica própria. `SigningKeys` (parseia PEM, gera par RSA, monta o
+JWKS) fica em `adapter/out/token`, ao lado do `NimbusRsaTokenSigner` com quem compartilha a
+chave ativa - faz trabalho de verdade, não é config.
+
+Dentro de `adapter/in`, `controller` guarda as classes anotadas com `@RestController` e, dentro
+dele, `request`/`response` (por direção do DTO) e `mapper` - convenção do ecossistema Cashflow
+(`adapters.in.controller.mapper`). `ApiExceptionHandler` e `RequestTimingFilter` ficam direto em
+`adapter/in`: não são controller nem DTO nem mapper - a exceção é tratada para qualquer
+controller, e o filtro roda antes do roteamento, para toda requisição. `ErrorResponse` mora em
+`controller/response` mesmo sendo usado pelo `ApiExceptionHandler` (fora de `controller`): é a
+forma de resposta de erro dos controllers, então acompanha os outros DTOs de resposta.
 
 Regra de dependência: `adapter → application → domain`. O domínio não conhece Spring, JDBC nem
 Nimbus. `AuthenticateWithProviderService` conhece só as portas e o domínio.
@@ -40,9 +56,9 @@ Nimbus. `AuthenticateWithProviderService` conhece só as portas e o domínio.
 ```
 POST /api/token/oauth {provider, idToken}
   │
-  ▼  adapter/in/web — OAuthTokenController
+  ▼  adapter/in/controller — OAuthTokenController
 validação Bean (provider presente, idToken não-branco)
-monta AuthenticateCommand(provider, idToken)
+mapper.toCommand(request) → AuthenticateCommand(provider, idToken)
   │
   ▼  application — AuthenticateWithProviderService.authenticate(command)
 ProviderIdentity id = validator(provider).validate(idToken)   → 401 se inválido/expirado
@@ -77,7 +93,7 @@ Java puro, sem framework.
 
 ## 4. Aplicação (`application`)
 
-- **`port/in/AuthenticateWithProviderUseCase`** — a única porta de entrada. Carrega o
+- **`port/in/AuthenticateWithProviderInputPort`** — a única porta de entrada. Carrega o
   `AuthenticateCommand` e o `IssuedToken` como records aninhados.
 - **`port/out/ValidateGoogleIdTokenOutputPort`** e **`ValidateMicrosoftIdTokenOutputPort`** —
   `ProviderIdentity validate(String idToken)`. Duas portas, uma por provider, em vez de uma
@@ -92,14 +108,25 @@ Java puro, sem framework.
 
 ## 5. Adaptadores e config
 
-### 5.1 `adapter/in/web`
+### 5.1 `adapter/in`
 
-- **`OAuthTokenController`** (`POST /api/token/oauth`) — JSON ↔ command, chama a porta, mapeia
-  para `TokenResponse`. Os nomes de campo do contrato (`id`, `token`, `expiresIn`) vivem no DTO.
-- **`JwksController`** (`GET /.well-known/jwks.json`) — serializa `SigningKeys.publicJwks()`.
+- **`controller/OAuthTokenController`** (`POST /api/token/oauth`) — JSON ↔ command via
+  `OAuthTokenMapper`, chama a porta. Os nomes de campo do contrato (`id`, `token`, `expiresIn`)
+  vivem no DTO.
+- **`controller/JwksController`** (`GET /.well-known/jwks.json`) — serializa
+  `SigningKeys.publicJwks()`.
+- **`controller/mapper/OAuthTokenMapper`** — converte `OAuthLoginRequest` → `AuthenticateCommand`
+  e `IssuedToken` → `TokenResponse`. Mantém o controller sem lógica de conversão e os DTOs sem
+  conhecer tipo nenhum da camada de aplicação.
+- **`controller/request/OAuthLoginRequest`** — corpo de `POST /api/token/oauth`.
+- **`controller/response/TokenResponse`, `controller/response/ErrorResponse`** — respostas de
+  sucesso e de erro. Records simples, sem método de conveniência; a conversão fica no mapper.
 - **`ApiExceptionHandler`** — `@RestControllerAdvice`: `InvalidProviderTokenException`→401,
   `TokenExpiredException`→401, `MethodArgumentNotValidException`→400, `DataAccessException`→503,
   resto→500. Sempre `{ "message": "..." }`.
+- **`RequestTimingFilter`** — `OncePerRequestFilter` que loga método, path, status e duração de
+  cada requisição. Não implementa porta nenhuma; é observabilidade pura, à parte do fluxo de
+  negócio.
 
 ### 5.2 `adapter/out`
 
@@ -112,6 +139,10 @@ Java puro, sem framework.
 - **`token/NimbusRsaTokenSigner`** (implementa `TokenSignerPort`) — monta `JWTClaimsSet` (claims
   da `especificacao.md` §4, incluindo a claim de URI longa para compatibilidade), header com o
   `kid` da chave ativa, assina com `RSASSASigner`.
+- **`token/SigningKeys`** — carrega a chave privada ativa (do PEM ou gera efêmera) e monta o
+  `JWKSet` público (ativa + `additional-jwks`). Expõe `activeSigningKey()` (com privada, para o
+  `NimbusRsaTokenSigner`) e `publicJwks()` (só pública, para o `JwksController`). É o único ponto
+  que toca material de chave.
 
 ### 5.3 `config`
 
@@ -119,14 +150,9 @@ Java puro, sem framework.
   JWKS extra, flag de dev.
 - **`OAuthProperties`** (`@ConfigurationProperties("auth.oauth")`) — client id do Google, client
   id + tenant id da Microsoft. Usada pelos validators de `adapter/out/oauth`.
-- **`SigningKeys`** (`@Component`) — no construtor: carrega a chave privada ativa (do PEM ou
-  gera efêmera) e monta o `JWKSet` público (ativa + `additional-jwks`). Expõe
-  `activeSigningKey()` (com privada, para o signer) e `publicJwks()` (só pública, para o
-  controller). É o único ponto que toca material de chave.
 - **`SecurityConfig`** — público: `/api/token/oauth`, JWKS e health; resto `denyAll`. `csrf`
   off, stateless, sem `formLogin`/`httpBasic`. **Não há filtro de JWT** — este serviço não
   valida token de ninguém.
-- **`RequestTimingFilter`** — loga método, path, status e duração de cada requisição.
 
 ## 6. Decisões e trade-offs
 
@@ -162,6 +188,6 @@ Java puro, sem framework.
 | `NimbusRsaTokenSigner` + `SigningKeys` | JUnit puro: assina e valida **só com o JWKS público**; confere claims; garante que o JWKS não vaza material privado. **Existe.** |
 | `AuthenticateWithProviderService` | JUnit + Mockito nas portas: usuário novo → cria e assina; usuário existente → não cria; token inválido → propaga a exceção. *(a escrever)* |
 | Validators de provider | JUnit com um JWKS/JWT gerados no teste (sem rede): assinatura, `iss`, `aud`, `exp`, `email_verified`. *(a escrever)* |
-| `adapter/in/web` | `@WebMvcTest` + `MockMvc`, use case mockado: shape do JSON, códigos de status. *(a escrever)* |
+| `adapter/in/controller` | `@WebMvcTest` + `MockMvc`, use case mockado: shape do JSON, códigos de status. *(a escrever)* |
 | `JdbcAuthIdentityAdapter` | `@JdbcTest` + Testcontainers (SQL Server) com o Flyway aplicado. *(a escrever)* |
 | Fronteiras | ArchUnit: `domain` sem `org.springframework..`; `application` sem `..adapter..`. Há testes em `src/test/java/.../architecture/`, ainda sem apontar para o pacote real. |

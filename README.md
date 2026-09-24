@@ -41,11 +41,11 @@ assimétrica separa os papéis: **só o auth assina; todo o resto só verifica**
 | Item | Onde |
 |------|------|
 | Projeto Spring Boot 3.4 / Java 21 | [`pom.xml`](pom.xml) |
-| `POST /api/token/oauth` — ID token Google/Microsoft → JWT RS256 | [`OAuthTokenController`](src/main/java/com/cashflow/auth/adapter/in/web/OAuthTokenController.java) → [`AuthenticateWithProviderService`](src/main/java/com/cashflow/auth/application/service/AuthenticateWithProviderService.java) |
+| `POST /api/token/oauth` — ID token Google/Microsoft → JWT RS256 | [`OAuthTokenController`](src/main/java/com/cashflow/auth/adapter/in/controller/OAuthTokenController.java) → [`AuthenticateWithProviderService`](src/main/java/com/cashflow/auth/application/service/AuthenticateWithProviderService.java) |
 | Validação do ID token de cada provider (JWKS remoto, `iss`, `aud`) | [`GoogleIdTokenValidatorAdapter`](src/main/java/com/cashflow/auth/adapter/out/oauth/GoogleIdTokenValidatorAdapter.java) · [`MicrosoftIdTokenValidatorAdapter`](src/main/java/com/cashflow/auth/adapter/out/oauth/MicrosoftIdTokenValidatorAdapter.java) |
 | Usuários em `auth.AuthIdentity` (schema próprio, migrations com Flyway) | [`JdbcAuthIdentityAdapter`](src/main/java/com/cashflow/auth/adapter/out/persistence/JdbcAuthIdentityAdapter.java) · [`db/migration`](src/main/resources/db/migration) |
-| `GET /.well-known/jwks.json` — chaves públicas | [`JwksController`](src/main/java/com/cashflow/auth/adapter/in/web/JwksController.java) |
-| Assinatura RS256 + construção do JWKS (Nimbus) | [`SigningKeys`](src/main/java/com/cashflow/auth/config/SigningKeys.java) + [`NimbusRsaTokenSigner`](src/main/java/com/cashflow/auth/adapter/out/token/NimbusRsaTokenSigner.java) |
+| `GET /.well-known/jwks.json` — chaves públicas | [`JwksController`](src/main/java/com/cashflow/auth/adapter/in/controller/JwksController.java) |
+| Assinatura RS256 + construção do JWKS (Nimbus) | [`SigningKeys`](src/main/java/com/cashflow/auth/adapter/out/token/SigningKeys.java) + [`NimbusRsaTokenSigner`](src/main/java/com/cashflow/auth/adapter/out/token/NimbusRsaTokenSigner.java) |
 | `GET /actuator/health` | starter actuator |
 
 **Ainda não** (ver `docs/especificacao.md` §8): rotação de chave automatizada, refresh tokens,
@@ -121,7 +121,8 @@ mvn test
 ## Notas de configuração
 
 - **A chave privada nunca é versionada.** Em produção vem de um secret manager, injetada em
-  `AUTH_PRIVATE_KEY_PEM` (ou um caminho de arquivo, se preferir adaptar `SigningKeys`).
+  `AUTH_PRIVATE_KEY_PEM` (ou um caminho de arquivo, se preferir adaptar
+  [`SigningKeys`](src/main/java/com/cashflow/auth/adapter/out/token/SigningKeys.java)).
 - **`AUTH_ISSUER`** precisa ser idêntico ao valor que os consumidores esperam na claim `iss`.
 - Os **client ids** (`AUTH_OAUTH_*`) precisam ser os do mesmo app que emitiu o ID token: o
   serviço rejeita tokens cujo `aud` seja outro.

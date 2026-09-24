@@ -1,9 +1,9 @@
-package com.cashflow.auth.adapter.in.web;
+package com.cashflow.auth.adapter.in.controller;
 
-import com.cashflow.auth.adapter.in.web.dto.OAuthLoginRequest;
-import com.cashflow.auth.adapter.in.web.dto.TokenResponse;
-import com.cashflow.auth.application.port.in.AuthenticateWithProviderUseCase;
-import com.cashflow.auth.application.port.in.AuthenticateWithProviderUseCase.AuthenticateCommand;
+import com.cashflow.auth.adapter.in.controller.mapper.OAuthTokenMapper;
+import com.cashflow.auth.adapter.in.controller.request.OAuthLoginRequest;
+import com.cashflow.auth.adapter.in.controller.response.TokenResponse;
+import com.cashflow.auth.application.port.in.AuthenticateWithProviderInputPort;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -19,16 +19,18 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/token/oauth")
 public class OAuthTokenController {
 
-    private final AuthenticateWithProviderUseCase authenticateWithProviderUseCase;
+    private final AuthenticateWithProviderInputPort authenticateWithProviderUseCase;
+    private final OAuthTokenMapper mapper;
 
-    public OAuthTokenController(AuthenticateWithProviderUseCase authenticateWithProviderUseCase) {
+    public OAuthTokenController(AuthenticateWithProviderInputPort authenticateWithProviderUseCase,
+                                 OAuthTokenMapper mapper) {
         this.authenticateWithProviderUseCase = authenticateWithProviderUseCase;
+        this.mapper = mapper;
     }
 
     @PostMapping
     public TokenResponse issue(@Valid @RequestBody OAuthLoginRequest request) {
-        var issued = authenticateWithProviderUseCase.authenticate(
-                new AuthenticateCommand(request.provider(), request.idToken()));
-        return TokenResponse.from(issued);
+        var issued = authenticateWithProviderUseCase.authenticate(mapper.toCommand(request));
+        return mapper.toResponse(issued);
     }
 }

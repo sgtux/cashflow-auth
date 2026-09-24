@@ -1,8 +1,7 @@
 package com.cashflow.auth.adapter.out.token;
 
-import com.cashflow.auth.application.port.out.TokenSignerPort;
+import com.cashflow.auth.application.port.out.TokenSignerOutputPort;
 import com.cashflow.auth.config.AuthProperties;
-import com.cashflow.auth.config.SigningKeys;
 import com.cashflow.auth.domain.AuthUser;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -24,7 +23,7 @@ import java.util.UUID;
  * pelo .NET) continuem funcionando durante a migracao - ver ./docs/migracao-hs256-rs256.md.</p>
  */
 @Component
-public class NimbusRsaTokenSigner implements TokenSignerPort {
+public class NimbusRsaTokenSigner implements TokenSignerOutputPort {
 
     /** Claim de compatibilidade: e como o .NET escreve {@code ClaimTypes.Sid} no token hoje. */
     public static final String LEGACY_SID_CLAIM = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/sid";

@@ -1,9 +1,9 @@
 package com.cashflow.auth.application.service;
 
-import com.cashflow.auth.application.port.in.AuthenticateWithProviderUseCase;
+import com.cashflow.auth.application.port.in.AuthenticateWithProviderInputPort;
 import com.cashflow.auth.application.port.out.CreateAuthIdentityOutputPort;
 import com.cashflow.auth.application.port.out.FindAuthIdentityByEmailOutputPort;
-import com.cashflow.auth.application.port.out.TokenSignerPort;
+import com.cashflow.auth.application.port.out.TokenSignerOutputPort;
 import com.cashflow.auth.application.port.out.ValidateGoogleIdTokenOutputPort;
 import com.cashflow.auth.application.port.out.ValidateMicrosoftIdTokenOutputPort;
 import com.cashflow.auth.config.AuthProperties;
@@ -20,7 +20,7 @@ import org.springframework.stereotype.Service;
  * aplicacao. Sem regra de negocio propria - so coordenacao. Ver ./docs/especificacao.md secao 6.
  */
 @Service
-public class AuthenticateWithProviderService implements AuthenticateWithProviderUseCase {
+public class AuthenticateWithProviderService implements AuthenticateWithProviderInputPort {
 
     private static final Logger log = LoggerFactory.getLogger(AuthenticateWithProviderService.class);
 
@@ -28,14 +28,14 @@ public class AuthenticateWithProviderService implements AuthenticateWithProvider
     private final ValidateMicrosoftIdTokenOutputPort microsoftValidator;
     private final FindAuthIdentityByEmailOutputPort findAuthIdentity;
     private final CreateAuthIdentityOutputPort createAuthIdentity;
-    private final TokenSignerPort tokenSigner;
+    private final TokenSignerOutputPort tokenSigner;
     private final AuthProperties properties;
 
     public AuthenticateWithProviderService(ValidateGoogleIdTokenOutputPort googleValidator,
                                             ValidateMicrosoftIdTokenOutputPort microsoftValidator,
                                             FindAuthIdentityByEmailOutputPort findAuthIdentity,
                                             CreateAuthIdentityOutputPort createAuthIdentity,
-                                            TokenSignerPort tokenSigner,
+                                            TokenSignerOutputPort tokenSigner,
                                             AuthProperties properties) {
         this.googleValidator = googleValidator;
         this.microsoftValidator = microsoftValidator;

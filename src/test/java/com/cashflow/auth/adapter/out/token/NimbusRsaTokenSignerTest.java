@@ -1,7 +1,6 @@
 package com.cashflow.auth.adapter.out.token;
 
 import com.cashflow.auth.config.AuthProperties;
-import com.cashflow.auth.config.SigningKeys;
 import com.cashflow.auth.domain.AuthUser;
 import com.nimbusds.jose.crypto.RSASSAVerifier;
 import com.nimbusds.jose.jwk.JWKSet;

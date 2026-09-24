@@ -8,7 +8,7 @@ import com.cashflow.auth.domain.OAuthProvider;
  * login com aquele email. E o unico caso de uso do servico. Corresponde a
  * {@code POST /api/token/oauth} (ver ./docs/especificacao.md secao 2 e 6).
  */
-public interface AuthenticateWithProviderUseCase {
+public interface AuthenticateWithProviderInputPort {
 
     IssuedToken authenticate(AuthenticateCommand command);
 

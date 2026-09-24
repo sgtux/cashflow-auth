@@ -1,4 +1,4 @@
-package com.cashflow.auth.adapter.in.web.dto;
+package com.cashflow.auth.adapter.in.controller.request;
 
 import com.cashflow.auth.domain.OAuthProvider;
 import jakarta.validation.constraints.NotBlank;

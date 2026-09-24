@@ -1,4 +1,4 @@
-package com.cashflow.auth.config;
+package com.cashflow.auth.adapter.in;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -17,7 +17,8 @@ import java.io.IOException;
  * <p>Filter, nao AOP no controller: roda para toda requisicao que chega no servlet container,
  * inclusive as que falham antes de alcancar um controller (ex: 401 de validacao, erro de
  * roteamento). Mede o tempo real da requisicao (primeiro ao ultimo byte), nao so o metodo de
- * negocio.</p>
+ * negocio. Fica direto em {@code adapter/in} (nao em {@code controllers}) porque nao e um
+ * controller - intercepta toda requisicao, antes de qualquer roteamento.</p>
  *
  * <p>Como o appender de log do OpenTelemetry ja esta ativo neste servico, esta linha de log sai
  * automaticamente correlacionada com o trace da requisicao no Dynatrace (trace_id/span_id

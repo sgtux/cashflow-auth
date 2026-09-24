@@ -6,34 +6,19 @@ import com.tngtech.archunit.lang.ArchRule;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 
-@AnalyzeClasses(packages = "com.sgtux.hexagonal")
+@AnalyzeClasses(packages = "com.cashflow.auth")
 public class NamingConventionTest {
-
-    @ArchTest
-    public static final ArchRule consumer_reside_only_consumer_package = classes()
-            .that()
-            .haveNameMatching(".*Consumer")
-            .should()
-            .resideInAPackage("..adapters.in.consumer")
-            .as("Consumer classes should reside inside consumer package in adapters.in package");
 
     @ArchTest
     public static final ArchRule mapper_reside_only_mapper_package = classes()
             .that()
             .haveNameMatching(".*Mapper")
             .should()
-            .resideInAnyPackage("..adapters.in.consumer.mapper", "..adapters.in.controller.mapper",
-                    "..adapters.out.repository.mapper", "..adapters.out.client.mapper")
+            .resideInAnyPackage("..adapter.in.controller.mapper",
+                    "..adapter.out.repository.mapper", "..adapter.out.client.mapper")
             .as("Mapper classes should reside inside mapper package");
 
     @ArchTest
-    private static final ArchRule should_be_suffixed_consumer = classes()
-            .that()
-            .resideInAPackage("..consumer")
-            .should()
-            .haveSimpleNameEndingWith("Consumer");
-
-            @ArchTest
     private static final ArchRule should_be_suffixed_mapper = classes()
             .that()
             .resideInAPackage("..mapper")
@@ -41,4 +26,12 @@ public class NamingConventionTest {
             .haveSimpleNameEndingWith("Mapper")
             .orShould()
             .haveSimpleNameEndingWith("MapperImpl");
+
+    @ArchTest
+    private static final ArchRule should_be_suffixed_controller = classes()
+            .that()
+            .resideInAPackage("..controller")
+            .should()
+            .haveSimpleNameEndingWith("Controller");
+
 }

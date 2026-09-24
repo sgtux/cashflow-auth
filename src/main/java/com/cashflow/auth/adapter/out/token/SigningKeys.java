@@ -1,5 +1,6 @@
-package com.cashflow.auth.config;
+package com.cashflow.auth.adapter.out.token;
 
+import com.cashflow.auth.config.AuthProperties;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
@@ -25,6 +26,11 @@ import java.util.Map;
 /**
  * Guarda a chave RSA ativa (usada para assinar) e o conjunto de chaves PUBLICAS publicado em
  * {@code /.well-known/jwks.json}. Ver ./docs/especificacao.md secoes 4 e 5.
+ *
+ * <p>Fica em {@code adapter/out/token} (nao em {@code config}) porque faz trabalho de verdade -
+ * parseia PEM, gera par RSA, monta o {@code JWKSet} - a mesma familia do
+ * {@link NimbusRsaTokenSigner}, so que {@link com.cashflow.auth.adapter.in.controller.JwksController}
+ * (em {@code adapter/in/controller}) tambem usa direto, para publicar o JWKS.</p>
  *
  * <ul>
  *   <li>Producao: {@code auth.private-key-pem} traz a chave privada ativa (PEM PKCS#8).</li>

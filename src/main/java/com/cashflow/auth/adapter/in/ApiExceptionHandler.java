@@ -1,6 +1,6 @@
-package com.cashflow.auth.adapter.in.web;
+package com.cashflow.auth.adapter.in;
 
-import com.cashflow.auth.adapter.in.web.dto.ErrorResponse;
+import com.cashflow.auth.adapter.in.controller.response.ErrorResponse;
 import com.cashflow.auth.domain.InvalidProviderTokenException;
 import com.cashflow.auth.domain.TokenExpiredException;
 

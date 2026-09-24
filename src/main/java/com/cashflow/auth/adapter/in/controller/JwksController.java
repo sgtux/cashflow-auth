@@ -1,6 +1,6 @@
-package com.cashflow.auth.adapter.in.web;
+package com.cashflow.auth.adapter.in.controller;
 
-import com.cashflow.auth.config.SigningKeys;
+import com.cashflow.auth.adapter.out.token.SigningKeys;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
